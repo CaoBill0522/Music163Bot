@@ -73,8 +73,7 @@ func parseMusicID(text string) int {
 		}
 		if strings.Contains(musicUrl[0], "song") {
 			ur, _ := url.Parse(musicUrl[0])
-			id := ur.Query().Get("id")
-			if musicid, _ := strconv.Atoi(id); musicid != 0 {
+			if musicid := parseURLID(ur, "song"); musicid != 0 {
 				return musicid
 			}
 		}
@@ -95,12 +94,55 @@ func parsePlaylistID(text string) int {
 	if err != nil {
 		return 0
 	}
-	if id := ur.Query().Get("id"); id != "" {
-		playlistID, _ := strconv.Atoi(id)
-		return playlistID
+	return parseURLID(ur, "playlist")
+}
+
+func parseURLID(ur *url.URL, kind string) int {
+	if ur == nil {
+		return 0
 	}
-	playlistID, _ := strconv.Atoi(extractInt(strings.TrimPrefix(ur.Path, "/playlist")))
-	return playlistID
+	if id := queryID(ur.RawQuery); id != 0 {
+		return id
+	}
+	if id := pathID(ur.Path, kind); id != 0 {
+		return id
+	}
+	fragment := strings.TrimPrefix(ur.Fragment, "/")
+	if fragment == "" {
+		return 0
+	}
+	if index := strings.Index(fragment, "?"); index >= 0 {
+		if id := queryID(fragment[index+1:]); id != 0 {
+			return id
+		}
+		fragment = fragment[:index]
+	}
+	return pathID("/"+fragment, kind)
+}
+
+func queryID(rawQuery string) int {
+	if rawQuery == "" {
+		return 0
+	}
+	id, _ := strconv.Atoi(urlParseQuery(rawQuery).Get("id"))
+	return id
+}
+
+func urlParseQuery(rawQuery string) url.Values {
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return url.Values{}
+	}
+	return values
+}
+
+func pathID(pathText, kind string) int {
+	pathText = strings.TrimPrefix(pathText, "/")
+	if !strings.HasPrefix(pathText, kind) {
+		return 0
+	}
+	id, _ := strconv.Atoi(extractInt(strings.TrimPrefix(pathText, kind)))
+	return id
 }
 
 // 提取数字

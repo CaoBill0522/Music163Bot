@@ -173,13 +173,13 @@ func processCallbackDownload(args []string, updateQuery tgbotapi.CallbackQuery, 
 	if musicID == 0 || updateQuery.Message == nil {
 		return nil
 	}
+	ctx := startTask(updateQuery.Message.Chat.ID, fmt.Sprintf("下载歌曲 %d", musicID))
+	defer finishTask(updateQuery.Message.Chat.ID, ctx)
+
 	callback := tgbotapi.NewCallback(updateQuery.ID, callbackText)
-	_, err = bot.Request(callback)
-	if err != nil {
+	if err = requestNonCritical(bot, callback); err != nil {
 		return err
 	}
-	startTask(updateQuery.Message.Chat.ID, fmt.Sprintf("下载歌曲 %d", musicID))
-	defer finishTask(updateQuery.Message.Chat.ID)
 	return downloadAllToServer(musicID, *updateQuery.Message, bot)
 }
 
@@ -188,12 +188,12 @@ func processCallbackDownloadMP3(args []string, updateQuery tgbotapi.CallbackQuer
 	if musicID == 0 || updateQuery.Message == nil {
 		return nil
 	}
+	ctx := startTask(updateQuery.Message.Chat.ID, fmt.Sprintf("下载 MP3 歌曲 %d", musicID))
+	defer finishTask(updateQuery.Message.Chat.ID, ctx)
+
 	callback := tgbotapi.NewCallback(updateQuery.ID, callbackText)
-	_, err = bot.Request(callback)
-	if err != nil {
+	if err = requestNonCritical(bot, callback); err != nil {
 		return err
 	}
-	startTask(updateQuery.Message.Chat.ID, fmt.Sprintf("下载 MP3 歌曲 %d", musicID))
-	defer finishTask(updateQuery.Message.Chat.ID)
 	return downloadAllMP3ToServer(musicID, *updateQuery.Message, bot)
 }

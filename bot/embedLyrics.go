@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +13,7 @@ import (
 	"time"
 )
 
-func embedMetadataIntoAudio(audioPath, lyricPath string, info songInfo) error {
+func embedMetadataIntoAudio(ctx context.Context, audioPath, lyricPath string, info songInfo) error {
 	lyrics, err := os.ReadFile(lyricPath)
 	if err != nil {
 		return err
@@ -29,7 +30,7 @@ func embedMetadataIntoAudio(audioPath, lyricPath string, info songInfo) error {
 		return fmt.Errorf("暂不支持嵌入 %s 文件", ext)
 	}
 
-	coverPath, coverErr := downloadCoverImage(info.PicURL)
+	coverPath, coverErr := downloadCoverImage(ctx, info.PicURL)
 	if coverErr == nil {
 		defer os.Remove(coverPath)
 	}
@@ -61,10 +62,15 @@ func embedMetadataIntoAudio(audioPath, lyricPath string, info songInfo) error {
 	}
 	args = append(args, tmpPath)
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmdCtx, cancel := commandContext(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(cmdCtx, "ffmpeg", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = os.Remove(tmpPath)
+		if cmdCtx.Err() != nil {
+			return fmt.Errorf("ffmpeg 嵌入超时或任务已停止: %w", cmdCtx.Err())
+		}
 		return fmt.Errorf("ffmpeg 嵌入失败: %s", strings.TrimSpace(string(output)))
 	}
 	err = os.Rename(tmpPath, audioPath)
@@ -75,11 +81,19 @@ func embedMetadataIntoAudio(audioPath, lyricPath string, info songInfo) error {
 	return nil
 }
 
-func downloadCoverImage(picURL string) (string, error) {
+func downloadCoverImage(ctx context.Context, picURL string) (string, error) {
 	if picURL == "" {
 		return "", fmt.Errorf("缺少封面地址")
 	}
-	resp, err := http.Get(picURL)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", picURL, nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: downloadStallTimeout()}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

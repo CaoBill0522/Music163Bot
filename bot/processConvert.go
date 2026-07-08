@@ -2,24 +2,42 @@ package bot
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-func convertAudioToMP3(srcPath, dstPath string) error {
+func convertAudioToMP3(ctx context.Context, srcPath, dstPath string) error {
 	tmpPath := dstPath + ".tmp.mp3"
 	_ = os.Remove(tmpPath)
-	cmd := exec.Command("ffmpeg", "-y", "-threads", "0", "-i", srcPath, "-vn", "-codec:a", "libmp3lame", "-q:a", "2", tmpPath)
+	cmdCtx, cancel := commandContext(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(cmdCtx, "ffmpeg", "-y", "-threads", "0", "-i", srcPath, "-vn", "-codec:a", "libmp3lame", "-q:a", "2", tmpPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = os.Remove(tmpPath)
+		if cmdCtx.Err() != nil {
+			return fmt.Errorf("转换超时或任务已停止: %w", cmdCtx.Err())
+		}
 		return fmt.Errorf("转换失败 %s: %s", filepath.Base(srcPath), strings.TrimSpace(string(output)))
 	}
 	return os.Rename(tmpPath, dstPath)
+}
+
+func commandContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	timeout := downloadStallTimeout()
+	if timeout < 5*time.Minute {
+		timeout = 5 * time.Minute
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func copyFile(srcPath, dstPath string) error {

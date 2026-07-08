@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,12 +11,15 @@ import (
 )
 
 func downloadAllToServer(musicID int, message tgbotapi.Message, bot *tgbotapi.BotAPI) (err error) {
+	return downloadAllToServerWithContext(taskContext(message.Chat.ID), musicID, message, bot)
+}
+
+func downloadAllToServerWithContext(ctx context.Context, musicID int, message tgbotapi.Message, bot *tgbotapi.BotAPI) (err error) {
 	if exists, existingPath, existsErr := localSongExists(musicID); existsErr == nil && exists {
 		editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("歌曲已存在，已跳过\n%s", existingPath))
-		_, err = bot.Send(editMsg)
-		return err
+		return sendNonCritical(bot, editMsg)
 	}
-	musicPath, err := downloadMusicToServerPath(musicID, message, bot)
+	musicPath, err := downloadMusicToServerPathWithContext(ctx, musicID, message, bot)
 	if err != nil {
 		return err
 	}
@@ -27,12 +31,12 @@ func downloadAllToServer(musicID int, message tgbotapi.Message, bot *tgbotapi.Bo
 	} else {
 		status = fmt.Sprintf("%s\n歌词: %s", status, lyricPath)
 		editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("%s\n正在补齐封面和歌曲信息并嵌入歌词...", status))
-		_, _ = bot.Send(editMsg)
+		_ = sendNonCritical(bot, editMsg)
 		info, _, infoErr := getDownloadSongInfo(musicID)
 		if infoErr != nil {
 			status = fmt.Sprintf("%s\n嵌入元数据: 失败（%v）", status, infoErr)
 		} else {
-			embedErr := embedMetadataIntoAudio(musicPath, lyricPath, info)
+			embedErr := embedMetadataIntoAudio(ctx, musicPath, lyricPath, info)
 			if embedErr != nil {
 				status = fmt.Sprintf("%s\n嵌入元数据: 失败（%v）", status, embedErr)
 			} else {
@@ -42,26 +46,28 @@ func downloadAllToServer(musicID int, message tgbotapi.Message, bot *tgbotapi.Bo
 		}
 	}
 	editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, status)
-	_, err = bot.Send(editMsg)
-	return err
+	return sendNonCritical(bot, editMsg)
 }
 
 func downloadAllMP3ToServer(musicID int, message tgbotapi.Message, bot *tgbotapi.BotAPI) (err error) {
+	return downloadAllMP3ToServerWithContext(taskContext(message.Chat.ID), musicID, message, bot)
+}
+
+func downloadAllMP3ToServerWithContext(ctx context.Context, musicID int, message tgbotapi.Message, bot *tgbotapi.BotAPI) (err error) {
 	info, _, infoErr := getDownloadSongInfo(musicID)
 	if infoErr != nil {
 		editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, infoErr.Error())
-		_, _ = bot.Send(editMsg)
+		_ = sendNonCritical(bot, editMsg)
 		return infoErr
 	}
 	mp3Info := info
 	mp3Info.FileExt = "mp3"
 	if exists, existingPath, existsErr := localSongInfoExistsInDir(mp3Info, mp3Dir); existsErr == nil && exists {
 		editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("歌曲已存在，已跳过\n%s", existingPath))
-		_, err = bot.Send(editMsg)
-		return err
+		return sendNonCritical(bot, editMsg)
 	}
 
-	musicPath, err := downloadMusicToServerPath(musicID, message, bot)
+	musicPath, err := downloadMusicToServerPathWithContext(ctx, musicID, message, bot)
 	if err != nil {
 		return err
 	}
@@ -69,20 +75,20 @@ func downloadAllMP3ToServer(musicID int, message tgbotapi.Message, bot *tgbotapi
 	err = os.MkdirAll(mp3Dir, 0755)
 	if err != nil {
 		editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("创建 MP3 目录失败\n%v", err))
-		_, _ = bot.Send(editMsg)
+		_ = sendNonCritical(bot, editMsg)
 		return err
 	}
 	mp3Path := uniqueFilePath(filepath.Join(mp3Dir, safeMusicFileName(mp3Info)))
 	editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("正在转换 MP3...\n%s", filepath.Base(mp3Path)))
-	_, _ = bot.Send(editMsg)
+	_ = sendNonCritical(bot, editMsg)
 	if strings.EqualFold(filepath.Ext(musicPath), ".mp3") {
 		err = copyFile(musicPath, mp3Path)
 	} else {
-		err = convertAudioToMP3(musicPath, mp3Path)
+		err = convertAudioToMP3(ctx, musicPath, mp3Path)
 	}
 	if err != nil {
 		editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("MP3 转换失败\n%v", err))
-		_, _ = bot.Send(editMsg)
+		_ = sendNonCritical(bot, editMsg)
 		return err
 	}
 
@@ -93,8 +99,8 @@ func downloadAllMP3ToServer(musicID int, message tgbotapi.Message, bot *tgbotapi
 	} else {
 		status = fmt.Sprintf("%s\n歌词: %s", status, lyricPath)
 		editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("%s\n正在嵌入歌曲信息和歌词...", status))
-		_, _ = bot.Send(editMsg)
-		embedErr := embedMetadataIntoAudio(mp3Path, lyricPath, mp3Info)
+		_ = sendNonCritical(bot, editMsg)
+		embedErr := embedMetadataIntoAudio(ctx, mp3Path, lyricPath, mp3Info)
 		if embedErr != nil {
 			status = fmt.Sprintf("%s\n嵌入元数据: 失败（%v）", status, embedErr)
 		} else {
@@ -103,6 +109,5 @@ func downloadAllMP3ToServer(musicID int, message tgbotapi.Message, bot *tgbotapi
 		}
 	}
 	editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, status)
-	_, err = bot.Send(editMsg)
-	return err
+	return sendNonCritical(bot, editMsg)
 }

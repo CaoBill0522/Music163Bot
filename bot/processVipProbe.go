@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,7 +126,9 @@ func probeAudioDuration(filePath string) (float64, error) {
 	if _, err := exec.LookPath("ffprobe"); err != nil {
 		return 0, err
 	}
-	cmd := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filePath)
+	cmdCtx, cancel := commandContext(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(cmdCtx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filePath)
 	output, err := cmd.Output()
 	if err != nil {
 		return 0, err

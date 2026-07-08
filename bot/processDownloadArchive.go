@@ -45,8 +45,8 @@ func processDownloadArchiveInput(message tgbotapi.Message, input string, bot *tg
 		return err
 	}
 
-	startTask(message.Chat.ID, "打包下载 "+name)
-	defer finishTask(message.Chat.ID)
+	ctx := startTask(message.Chat.ID, "打包下载 "+name)
+	defer finishTask(message.Chat.ID, ctx)
 
 	archivePath, fileCount, err := createMusicArchive(dir, name)
 	if err != nil {

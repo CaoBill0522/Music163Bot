@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"regexp"
 	"sync"
 	"time"
@@ -86,9 +87,13 @@ var taskControl = struct {
 	sync.Mutex
 	stopped map[int64]bool
 	active  map[int64]string
+	ctx     map[int64]context.Context
+	cancel  map[int64]context.CancelFunc
 }{
 	stopped: make(map[int64]bool),
 	active:  make(map[int64]string),
+	ctx:     make(map[int64]context.Context),
+	cancel:  make(map[int64]context.CancelFunc),
 }
 
 type fileSession struct {

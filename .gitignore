@@ -1,0 +1,9 @@
+config.ini
+log/
+cache/
+Music163bot-Go
+*.bak
+*.zip
+.codex_tmp_keys/
+.DS_Store
+._*

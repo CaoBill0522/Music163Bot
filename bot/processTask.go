@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -17,18 +18,33 @@ func taskChatKey(message tgbotapi.Message) int64 {
 	return message.Chat.ID
 }
 
-func startTask(chatID int64, name string) {
+func startTask(chatID int64, name string) context.Context {
 	taskControl.Lock()
 	defer taskControl.Unlock()
+	if cancel := taskControl.cancel[chatID]; cancel != nil {
+		cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	taskControl.stopped[chatID] = false
 	taskControl.active[chatID] = name
+	taskControl.ctx[chatID] = ctx
+	taskControl.cancel[chatID] = cancel
+	return ctx
 }
 
-func finishTask(chatID int64) {
+func finishTask(chatID int64, ctx context.Context) {
 	taskControl.Lock()
 	defer taskControl.Unlock()
+	if taskControl.ctx[chatID] != ctx {
+		return
+	}
+	if cancel := taskControl.cancel[chatID]; cancel != nil {
+		cancel()
+	}
 	delete(taskControl.active, chatID)
 	delete(taskControl.stopped, chatID)
+	delete(taskControl.ctx, chatID)
+	delete(taskControl.cancel, chatID)
 }
 
 func requestStop(chatID int64) bool {
@@ -36,6 +52,9 @@ func requestStop(chatID int64) bool {
 	defer taskControl.Unlock()
 	_, active := taskControl.active[chatID]
 	taskControl.stopped[chatID] = true
+	if cancel := taskControl.cancel[chatID]; cancel != nil {
+		cancel()
+	}
 	return active
 }
 
@@ -53,6 +72,15 @@ func activeTaskSnapshot() map[int64]string {
 		result[chatID] = name
 	}
 	return result
+}
+
+func taskContext(chatID int64) context.Context {
+	taskControl.Lock()
+	defer taskControl.Unlock()
+	if ctx := taskControl.ctx[chatID]; ctx != nil {
+		return ctx
+	}
+	return context.Background()
 }
 
 func processStopCommand(message tgbotapi.Message, bot *tgbotapi.BotAPI) error {

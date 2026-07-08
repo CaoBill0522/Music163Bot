@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/XiaoMengXinX/Music163Api-Go/types"
 	downloader "github.com/XiaoMengXinX/SimpleDownloader"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/sirupsen/logrus"
 )
 
 type downloadSongURL struct {
@@ -36,6 +38,10 @@ type songInfo struct {
 }
 
 func downloadMusicToServerPath(musicID int, message tgbotapi.Message, bot *tgbotapi.BotAPI) (filePath string, err error) {
+	return downloadMusicToServerPathWithContext(taskContext(message.Chat.ID), musicID, message, bot)
+}
+
+func downloadMusicToServerPathWithContext(ctx context.Context, musicID int, message tgbotapi.Message, bot *tgbotapi.BotAPI) (filePath string, err error) {
 	d := downloader.NewDownloader().SetSavePath(downloadDir).SetBreakPoint(true)
 	if downloaderTimeout > 0 {
 		d.SetTimeOut(time.Duration(downloaderTimeout) * time.Second)
@@ -50,7 +56,7 @@ func downloadMusicToServerPath(musicID int, message tgbotapi.Message, bot *tgbot
 	}()
 
 	editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fetchInfo)
-	_, err = bot.Send(editMsg)
+	err = sendNonCritical(bot, editMsg)
 	if err != nil {
 		return "", err
 	}
@@ -58,39 +64,44 @@ func downloadMusicToServerPath(musicID int, message tgbotapi.Message, bot *tgbot
 	songInfo, songURL, err := getDownloadSongInfo(musicID)
 	if err != nil {
 		editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, err.Error())
-		_, _ = bot.Send(editMsg)
+		_ = sendNonCritical(bot, editMsg)
 		return "", err
 	}
 
 	err = os.MkdirAll(downloadDir, 0755)
 	if err != nil {
 		editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("创建下载目录失败\n%v", err))
-		_, _ = bot.Send(editMsg)
+		_ = sendNonCritical(bot, editMsg)
 		return "", err
 	}
 
 	fileName := safeMusicFileName(songInfo)
 	tmpFileName := fmt.Sprintf("%d-%s", time.Now().UnixMicro(), cleanURLPathBase(songURL.Url))
-	task, _ := d.NewDownloadTask(songURL.Url)
+	task, err := d.NewDownloadTask(songURL.Url)
+	if err != nil {
+		editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("创建下载任务失败\n%v", err))
+		_ = sendNonCritical(bot, editMsg)
+		return "", err
+	}
 	hostReplacer := strings.NewReplacer("m8.", "m7.", "m801.", "m701.", "m804.", "m701.", "m704.", "m701.")
 	task.ReplaceHostName(hostReplacer.Replace(task.GetHostName())).ForceHttps().ForceMultiThread()
 
 	editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf(musicInfoMsg+downloading, songInfo.SongName, songInfo.SongAlbum, songInfo.FileExt, float64(songInfo.MusicSize)/1024/1024))
-	_, err = bot.Send(editMsg)
+	err = sendNonCritical(bot, editMsg)
 	if err != nil {
 		return "", err
 	}
 
 	errCh := task.SetFileName(tmpFileName).DownloadWithChannel()
-	err = updateDownloadMessage(task, errCh, message, songInfo, downloading, bot)
+	err = updateDownloadMessage(ctx, task, errCh, message, songInfo, downloading, bot)
 	if err != nil && config["ReverseProxy"] != "" {
 		ch := task.WithResolvedIpOnHost(config["ReverseProxy"]).DownloadWithChannel()
-		err = updateDownloadMessage(task, ch, message, songInfo, redownloading, bot)
+		err = updateDownloadMessage(ctx, task, ch, message, songInfo, redownloading, bot)
 	}
 	if err != nil {
 		task.CleanTempFiles()
 		editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("下载失败\n%v", err))
-		_, _ = bot.Send(editMsg)
+		_ = sendNonCritical(bot, editMsg)
 		return "", err
 	}
 
@@ -101,7 +112,7 @@ func downloadMusicToServerPath(musicID int, message tgbotapi.Message, bot *tgbot
 			_ = os.Remove(tmpPath)
 			err = fmt.Errorf("%s\n%s", md5VerFailed, retryLater)
 			editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, err.Error())
-			_, _ = bot.Send(editMsg)
+			_ = sendNonCritical(bot, editMsg)
 			return "", err
 		}
 	}
@@ -111,13 +122,12 @@ func downloadMusicToServerPath(musicID int, message tgbotapi.Message, bot *tgbot
 	err = os.Rename(tmpPath, finalPath)
 	if err != nil {
 		editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf("保存文件失败\n%v", err))
-		_, _ = bot.Send(editMsg)
+		_ = sendNonCritical(bot, editMsg)
 		return "", err
 	}
 
 	editMsg = tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf(musicInfoMsg+downloadDone, songInfo.SongName, songInfo.SongAlbum, songInfo.FileExt, float64(songInfo.MusicSize)/1024/1024, finalPath))
-	_, err = bot.Send(editMsg)
-	return finalPath, err
+	return finalPath, sendNonCritical(bot, editMsg)
 }
 
 func getDownloadSongInfo(musicID int) (songInfo, downloadSongURL, error) {
@@ -182,24 +192,61 @@ func getDownloadSongInfo(musicID int) (songInfo, downloadSongURL, error) {
 	return info, urlInfo, nil
 }
 
-func updateDownloadMessage(task *downloader.DownloadTask, ch chan error, message tgbotapi.Message, songInfo songInfo, statusText string, bot *tgbotapi.BotAPI) (err error) {
+func updateDownloadMessage(ctx context.Context, task *downloader.DownloadTask, ch chan error, message tgbotapi.Message, songInfo songInfo, statusText string, bot *tgbotapi.BotAPI) (err error) {
 	var lastUpdateTime int64
+	lastProgressTime := time.Now()
+	lastWrittenBytes := task.GetWrittenBytes()
+	stallTimeout := downloadStallTimeout()
 	for {
 		select {
-		case err = <-ch:
+		case <-ctx.Done():
+			cancelDownloadTask(task)
+			task.CleanTempFiles()
+			logrus.Warnf("download canceled: chat=%d music=%d title=%s err=%v", message.Chat.ID, songInfo.MusicID, songInfo.SongName, ctx.Err())
+			return fmt.Errorf("任务已停止")
+		case err, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if err != nil {
+				logrus.Warnf("download finished with error: chat=%d music=%d title=%s err=%v", message.Chat.ID, songInfo.MusicID, songInfo.SongName, err)
+			}
 			return err
-		default:
+		case <-time.After(200 * time.Millisecond):
 			writtenBytes := task.GetWrittenBytes()
 			fileSize := task.GetFileSize()
+			if writtenBytes > lastWrittenBytes {
+				lastProgressTime = time.Now()
+				lastWrittenBytes = writtenBytes
+			}
+			if time.Since(lastProgressTime) > stallTimeout {
+				cancelDownloadTask(task)
+				task.CleanTempFiles()
+				logrus.Warnf("download stalled: chat=%d music=%d title=%s written=%d size=%d timeout=%s", message.Chat.ID, songInfo.MusicID, songInfo.SongName, writtenBytes, fileSize, stallTimeout)
+				return fmt.Errorf("下载超过 %s 没有进度，已停止当前歌曲", formatDuration(stallTimeout))
+			}
 			if fileSize == 0 || writtenBytes == 0 || time.Now().Unix()-lastUpdateTime < 2 {
-				time.Sleep(200 * time.Millisecond)
 				continue
 			}
 			editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, fmt.Sprintf(musicInfoMsg+statusText+downloadStatus, songInfo.SongName, songInfo.SongAlbum, songInfo.FileExt, float64(songInfo.MusicSize)/1024/1024, task.CalculateSpeed(time.Millisecond*500), float64(writtenBytes)/1024/1024, float64(fileSize)/1024/1024, (writtenBytes*100)/fileSize))
-			_, _ = bot.Send(editMsg)
+			_ = sendNonCritical(bot, editMsg)
 			lastUpdateTime = time.Now().Unix()
 		}
 	}
+}
+
+func cancelDownloadTask(task *downloader.DownloadTask) {
+	defer func() {
+		_ = recover()
+	}()
+	task.Cancel()
+}
+
+func downloadStallTimeout() time.Duration {
+	if downloaderTimeout > 0 {
+		return time.Duration(downloaderTimeout) * time.Second
+	}
+	return 60 * time.Second
 }
 
 func safeMusicFileName(songInfo songInfo) string {

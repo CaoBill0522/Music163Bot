@@ -12,6 +12,7 @@ import (
 	"github.com/XiaoMengXinX/Music163Api-Go/api"
 	"github.com/XiaoMengXinX/Music163Api-Go/types"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/sirupsen/logrus"
 )
 
 type playlistRetryTask struct {
@@ -231,8 +232,8 @@ func downloadPlaylistMusicIDsToServer(playlistID int, playlistName string, music
 	if toMP3 {
 		taskName += " MP3"
 	}
-	startTask(chatID, taskName)
-	defer finishTask(chatID)
+	ctx := startTask(chatID, taskName)
+	defer finishTask(chatID, ctx)
 
 	successCount := 0
 	failedCount := 0
@@ -243,41 +244,59 @@ func downloadPlaylistMusicIDsToServer(playlistID int, playlistName string, music
 	var err error
 
 	for i, musicID := range musicIDs {
-		if isTaskStopped(chatID) {
+		if ctx.Err() != nil || isTaskStopped(chatID) {
+			logrus.Warnf("playlist stopped before item: chat=%d playlist=%d index=%d total=%d", chatID, playlistID, i, totalCount)
 			return editPlaylistMessage(message, bot, fmt.Sprintf("%s\n%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d", title, playlistCanceled, i, totalCount, successCount, skippedCount, failedCount))
 		}
 		if i > 0 {
-			time.Sleep(2 * time.Second)
-			if isTaskStopped(chatID) {
+			select {
+			case <-ctx.Done():
+				logrus.Warnf("playlist canceled during delay: chat=%d playlist=%d index=%d total=%d err=%v", chatID, playlistID, i, totalCount, ctx.Err())
+				return editPlaylistMessage(message, bot, fmt.Sprintf("%s\n%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d", title, playlistCanceled, i, totalCount, successCount, skippedCount, failedCount))
+			case <-time.After(2 * time.Second):
+			}
+			if ctx.Err() != nil || isTaskStopped(chatID) {
+				logrus.Warnf("playlist stopped during delay: chat=%d playlist=%d index=%d total=%d", chatID, playlistID, i, totalCount)
 				return editPlaylistMessage(message, bot, fmt.Sprintf("%s\n%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d", title, playlistCanceled, i, totalCount, successCount, skippedCount, failedCount))
 			}
 		}
 		songName := getSongDisplayName(musicID)
-		editPlaylistMessage(message, bot, fmt.Sprintf("%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d\n正在处理: %s", title, i+1, totalCount, successCount, skippedCount, failedCount, songName))
+		logrus.Infof("playlist item start: chat=%d playlist=%d index=%d/%d music=%d name=%s", chatID, playlistID, i+1, totalCount, musicID, songName)
+		itemMessage, sendErr := sendPlaylistItemMessage(message, bot, fmt.Sprintf("%s\n进度: %d/%d\n正在处理: %s", title, i+1, totalCount, songName))
+		if sendErr != nil {
+			logrus.Warnf("send playlist item message failed: chat=%d playlist=%d index=%d/%d music=%d err=%v", chatID, playlistID, i+1, totalCount, musicID, sendErr)
+			itemMessage = message
+		}
 		exists, existingPath, infoErr := playlistSongExists(musicID, toMP3)
 		if infoErr == nil && exists {
 			skippedCount++
-			editPlaylistMessage(message, bot, fmt.Sprintf("%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d\n已存在，跳过: %s\n%s", title, i+1, totalCount, successCount, skippedCount, failedCount, songName, existingPath))
+			logrus.Infof("playlist item skipped existing: chat=%d playlist=%d index=%d/%d music=%d path=%s", chatID, playlistID, i+1, totalCount, musicID, existingPath)
+			editPlaylistMessage(itemMessage, bot, fmt.Sprintf("%s\n进度: %d/%d\n已存在，跳过: %s\n%s", title, i+1, totalCount, songName, existingPath))
 			continue
 		}
 		if toMP3 {
-			err = downloadAllMP3ToServer(musicID, message, bot)
+			err = downloadAllMP3ToServerWithContext(ctx, musicID, itemMessage, bot)
 		} else {
-			err = downloadAllToServer(musicID, message, bot)
+			err = downloadAllToServerWithContext(ctx, musicID, itemMessage, bot)
 		}
 		if err != nil {
+			if ctx.Err() != nil || isTaskStopped(chatID) {
+				logrus.Warnf("playlist canceled by task context: chat=%d playlist=%d index=%d/%d music=%d name=%s err=%v", chatID, playlistID, i+1, totalCount, musicID, songName, err)
+				return editPlaylistMessage(message, bot, fmt.Sprintf("%s\n%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d", title, playlistCanceled, i+1, totalCount, successCount, skippedCount, failedCount))
+			}
 			failedCount++
+			logrus.Warnf("playlist item failed: chat=%d playlist=%d index=%d/%d music=%d name=%s err=%v", chatID, playlistID, i+1, totalCount, musicID, songName, err)
 			failedItems = append(failedItems, failedPlaylistItem{
 				ID:    musicID,
 				Name:  songName,
 				Error: err.Error(),
 			})
-			editPlaylistMessage(message, bot, fmt.Sprintf("%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d\n刚才失败: %s", title, i+1, totalCount, successCount, skippedCount, failedCount, songName))
 			continue
 		}
 		successCount++
-		editPlaylistMessage(message, bot, fmt.Sprintf("%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d\n刚才完成: %s", title, i+1, totalCount, successCount, skippedCount, failedCount, songName))
-		if isTaskStopped(chatID) {
+		logrus.Infof("playlist item done: chat=%d playlist=%d index=%d/%d music=%d name=%s", chatID, playlistID, i+1, totalCount, musicID, songName)
+		if ctx.Err() != nil || isTaskStopped(chatID) {
+			logrus.Warnf("playlist stopped after item: chat=%d playlist=%d index=%d/%d", chatID, playlistID, i+1, totalCount)
 			return editPlaylistMessage(message, bot, fmt.Sprintf("%s\n%s\n进度: %d/%d\n成功: %d 跳过: %d 失败: %d", title, playlistCanceled, i+1, totalCount, successCount, skippedCount, failedCount))
 		}
 	}
@@ -289,6 +308,12 @@ func downloadPlaylistMusicIDsToServer(playlistID int, playlistName string, music
 		return editPlaylistMessageWithRetry(message, bot, status, retryKey)
 	}
 	return editPlaylistMessage(message, bot, status)
+}
+
+func sendPlaylistItemMessage(replyTo tgbotapi.Message, bot *tgbotapi.BotAPI, text string) (tgbotapi.Message, error) {
+	msg := tgbotapi.NewMessage(replyTo.Chat.ID, text)
+	msg.ReplyToMessageID = replyTo.MessageID
+	return bot.Send(msg)
 }
 
 func retryPlaylistFailed(args []string, updateQuery tgbotapi.CallbackQuery, bot *tgbotapi.BotAPI) error {
@@ -457,8 +482,7 @@ func playlistTitle(name string, playlistID int) string {
 
 func editPlaylistMessage(message tgbotapi.Message, bot *tgbotapi.BotAPI, text string) error {
 	editMsg := tgbotapi.NewEditMessageText(message.Chat.ID, message.MessageID, text)
-	_, err := bot.Send(editMsg)
-	return err
+	return sendNonCritical(bot, editMsg)
 }
 
 func editPlaylistMessageWithRetry(message tgbotapi.Message, bot *tgbotapi.BotAPI, text, retryKey string) error {
@@ -469,8 +493,7 @@ func editPlaylistMessageWithRetry(message tgbotapi.Message, bot *tgbotapi.BotAPI
 		),
 	)
 	editMsg.ReplyMarkup = &keyboard
-	_, err := bot.Send(editMsg)
-	return err
+	return sendNonCritical(bot, editMsg)
 }
 
 type failedPlaylistItem struct {
