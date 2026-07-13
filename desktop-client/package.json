@@ -11,7 +11,7 @@
     "dist:mac": "electron-builder --mac dir",
     "dist:win": "electron-builder --win --x64",
     "check:win": "node scripts/check-windows.cjs",
-    "app": "pnpm build && pnpm dist:mac",
+    "app:mac": "npm run build && npm run dist:mac",
     "app:win": "npm run build && npm run dist:win"
   },
   "dependencies": {

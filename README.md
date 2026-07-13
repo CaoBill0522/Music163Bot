@@ -1,16 +1,46 @@
-# Music163bot-Go
+# Music163Bot
 
-一个自用向 Telegram 网易云音乐下载 Bot。Bot 可以搜索单曲、下载歌单、转换 MP3、嵌入歌曲信息和歌词，也可以打包服务器里的音乐目录生成下载直链。
+网易云音乐下载工具集，包含可部署在服务器上的 Telegram Bot，以及 Windows/macOS 桌面客户端。两个客户端共用网易云账号、下载、格式转换、元数据和歌词能力，但可以独立使用。
 
-仓库同时包含桌面客户端：`macos-client/` 是共享的 Electron 客户端工程，可构建 macOS Apple Silicon 应用，以及 Windows x64 安装版和便携版。桌面端的具体构建方式见 [macos-client/WINDOWS.md](macos-client/WINDOWS.md)。
+## 项目组成
 
-默认目录：
+- **Telegram Bot**：面向服务器部署，通过 Telegram 搜索、下载、转换和管理歌曲文件。
+- **163MUSIC Desktop**：面向 Windows 10/11 x64 与 macOS Apple Silicon 的本地客户端，支持搜索、歌单、试听、下载队列和账号登录。
+
+## 下载桌面客户端
+
+已打包版本请前往 [GitHub Release](https://github.com/CaoBill0522/Music163Bot/releases/latest)：
+
+- macOS Apple Silicon (`arm64`)：下载 `163MUSIC-macOS-arm64-*.zip`，解压后打开 `163MUSIC.app`。
+- Windows x64：下载 `163MUSIC-Windows-x64-Setup-*.exe` 安装，或下载 `163MUSIC-Windows-x64-Portable-*.exe` 直接运行。
+
+macOS 版本为未公证的本地签名构建，首次打开时可能需要在系统“隐私与安全性”中确认打开。
+
+## 目录结构
+
+```text
+.
+├── bot/                Telegram Bot 业务代码
+├── desktop-client/     Windows/macOS 共用 Electron 客户端
+├── scripts/            Bot 辅助脚本
+├── main.go             Bot 程序入口
+├── config_example.ini  Bot 配置模板
+└── README.md           项目总说明
+```
+
+## 桌面客户端开发
+
+桌面客户端源码、构建命令和平台说明见 [desktop-client/README.md](desktop-client/README.md)。
+
+## Telegram Bot
+
+### 默认目录
 
 - 原始音乐目录：`/home/music`
 - MP3 音乐目录：`/home/music_mp3`
 - 文件管理根目录：`/home`
 
-## 功能
+### 功能
 
 - `/start`：展示功能菜单。
 - `/search`：搜索单曲，弹出结果列表，用户选择后自动下载，并嵌入歌名、歌手、专辑、封面和歌词。
@@ -23,7 +53,7 @@
 - `/status`：展示服务器硬件、磁盘和 Bot 实例运行信息，并静默检测 `MUSIC_U` 是否有效、VIP 下载是否可用。
 - `/download`：询问打包 `music` 还是 `musicmp3`，压缩对应目录内歌曲，并返回公网下载直链。
 
-## 行为说明
+### 行为说明
 
 - 下载过程会实时更新进度和下载速度。
 - 歌单批量下载时，每首歌曲之间间隔 2 秒，降低请求过快导致 IP 被限制的风险。
@@ -33,7 +63,7 @@
 - `/download` 是唯一生成文件下载直链的功能；其他功能只保存文件或显示本地路径。
 - `/status` 的 VIP 检测是静默执行的，只显示检测结果，不显示检测方法或临时文件信息。
 
-## 指令菜单
+### 指令菜单
 
 Bot 启动时会自动注册 Telegram 指令菜单：
 
@@ -52,7 +82,7 @@ Bot 启动时会自动注册 Telegram 指令菜单：
 
 如果 Telegram 客户端里菜单没有立刻刷新，重启 Bot 后等一会儿，Telegram 的命令缓存会自动更新。
 
-## 配置
+### 配置
 
 复制配置文件：
 
@@ -94,7 +124,7 @@ ReverseProxy =
 - `DownloadTimeout`：单次下载超时时间，单位秒。
 - `ReverseProxy`：下载失败后的备用代理地址，可留空。
 
-## 服务器部署
+### 服务器部署
 
 以下以 Ubuntu/Debian 为例。
 
@@ -150,7 +180,7 @@ go build -o Music163bot-Go .
 
 看到 `验证成功` 后，在 Telegram 里发送 `/start`、`/search`、`/playlist` 或 `/status` 测试。
 
-## 配置 Nginx 下载直链
+### 配置 Nginx 下载直链
 
 `/download` 会在 `/home/music` 或 `/home/music_mp3` 中生成 zip 压缩包，并用 `FileURLBase` 拼出下载地址。你需要让 Nginx 把公网路径映射到 `FileRoot`。
 
@@ -188,7 +218,7 @@ FileURLBase = https://你的域名/download
 FileURLBase = http://服务器IP/download
 ```
 
-## 使用 systemd 后台运行
+### 使用 systemd 后台运行
 
 创建服务文件：
 
@@ -236,7 +266,7 @@ go build -o Music163bot-Go .
 sudo systemctl restart music163bot
 ```
 
-## 文件管理模式
+### 文件管理模式
 
 发送 `/file` 后输入 `FilePassword`，验证通过后可使用：
 
@@ -253,7 +283,7 @@ exit
 
 文件管理被限制在 `FileRoot` 内，不能访问根目录之外的路径。`rm` 会直接删除文件或文件夹，使用前请确认路径。
 
-## 本地测试
+### 本地测试
 
 本地需要安装：
 
@@ -282,7 +312,7 @@ DownloadPath = /Users/你的用户名/Downloads/music
 Mp3Path = /Users/你的用户名/Downloads/music_mp3
 ```
 
-## 注意事项
+### 注意事项
 
 - 服务器必须安装 `ffmpeg` 和 `ffprobe`，否则 MP3 转换、元数据嵌入和 VIP 检测可能失败。
 - 歌单批量下载耗时较长，建议先用小歌单测试。
@@ -291,7 +321,7 @@ Mp3Path = /Users/你的用户名/Downloads/music_mp3
 - 某些歌曲可能因版权、会员权限、地区限制或无歌词导致下载失败。
 - 请确认运行 Bot 的系统用户对 `DownloadPath`、`Mp3Path` 和 `FileRoot` 有读写权限。
 
-## 相关项目
+### 相关项目
 
 - `XiaoMengXinX/Music163Api-Go`：网易云音乐搜索、歌曲详情、下载地址、歌词和歌单接口。
 - `XiaoMengXinX/SimpleDownloader`：音频下载、断点续传、多线程下载和进度统计。
