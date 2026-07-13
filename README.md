@@ -2,6 +2,8 @@
 
 一个自用向 Telegram 网易云音乐下载 Bot。Bot 可以搜索单曲、下载歌单、转换 MP3、嵌入歌曲信息和歌词，也可以打包服务器里的音乐目录生成下载直链。
 
+仓库同时包含桌面客户端：`macos-client/` 是共享的 Electron 客户端工程，可构建 macOS Apple Silicon 应用，以及 Windows x64 安装版和便携版。桌面端的具体构建方式见 [macos-client/WINDOWS.md](macos-client/WINDOWS.md)。
+
 默认目录：
 
 - 原始音乐目录：`/home/music`
